@@ -4,13 +4,18 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { openStore, AppError } from './lib/store.mjs';
+import { openAccess } from './lib/access.mjs';
+import { createGateway } from './lib/gateway.mjs';
+import { body as readBody } from './lib/http.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
-export function createApp({ database = resolve(root, 'data/board.sqlite') } = {}) {
+export function createApp({ database = resolve(root, 'data/board.sqlite'), publicUrl = null } = {}) {
   const store = openStore(database);
+  const access = openAccess(database);
+  const gateway = publicUrl ? createGateway({ store, access, publicUrl }) : null;
   // Per-process capability; same-origin page receives it. Never persisted or logged.
   const token = randomBytes(32).toString('hex');
-  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.mjs', ['app.mjs', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
+  const assets = new Map([['/', ['index.html', 'text/html']], ['/app.mjs', ['app.mjs', 'text/javascript']], ['/features.mjs', ['features.mjs', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -30,20 +35,19 @@ export function createApp({ database = resolve(root, 'data/board.sqlite') } = {}
         const provided = req.headers['x-board-token'];
         if (typeof provided !== 'string' || !/^[a-f0-9]{64}$/.test(provided) || !timingSafeEqual(Buffer.from(provided), Buffer.from(token))) throw new AppError('画面を再読み込みしてください。', 403);
         if (req.method === 'GET' && url.pathname === '/api/state') return send(200, store.read());
+        if (req.method === 'GET' && url.pathname === '/api/connections') return send(200, { ...access.list(), mcpUrl: publicUrl ? `${new URL(publicUrl).origin}/mcp` : null });
+        if (req.method === 'POST' && url.pathname.startsWith('/api/connections/')) {
+          const input = await readBody(req);
+          if (url.pathname === '/api/connections/approve') return send(200, access.approve(input.id, input.author, input.topics, store.read().topics.filter(t => !t.archived).map(t => t.id)));
+          if (url.pathname === '/api/connections/deny') { access.deny(input.id); return send(200, { ok: true }); }
+          if (url.pathname === '/api/connections/revoke') { access.revoke(input.id); return send(200, { ok: true }); }
+        }
         if (req.method === 'GET' && url.pathname === '/api/export') {
           res.setHeader('Content-Disposition', 'attachment; filename="abocado.backup.json"');
           return send(200, store.read());
         }
         if (req.method === 'POST' && url.pathname === '/api/action') {
-          if (req.headers['content-type'] !== 'application/json') throw new AppError('JSON形式で送信してください。', 415);
-          const chunks = []; let bytes = 0;
-          for await (const chunk of req) {
-            bytes += chunk.length;
-            if (bytes > 128000) throw new AppError('入力が大きすぎます。', 413);
-            chunks.push(chunk);
-          }
-          let input;
-          try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new AppError('JSON形式が不正です。'); }
+          const input = await readBody(req);
           return send(200, store.dispatch(input));
         }
         return send(404, { error: '見つかりません。' });
@@ -57,13 +61,20 @@ export function createApp({ database = resolve(root, 'data/board.sqlite') } = {}
       send(error instanceof AppError ? error.status : 500, { error: error instanceof AppError ? error.message : '保存に失敗しました。データを消さずにアプリを再起動してください。' });
     }
   });
-  server.on('close', () => store.close());
+  server.board = { gateway };
+  server.on('close', () => { gateway?.close(); access.close(); store.close(); });
   return server;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1–65535');
-  const server = createApp({ database: process.env.BOARD_DB ? resolve(process.env.BOARD_DB) : undefined });
+  const server = createApp({ database: process.env.BOARD_DB ? resolve(process.env.BOARD_DB) : undefined, publicUrl: process.env.MCP_PUBLIC_URL || null });
+  if (server.board.gateway) {
+    const mcpPort = Number(process.env.MCP_PORT || 3002);
+    if (!Number.isInteger(mcpPort) || mcpPort < 1 || mcpPort > 65535 || mcpPort === port) throw new Error('MCP_PORTは画面と異なるポートを指定してください。');
+    server.board.gateway.listen(mcpPort, '127.0.0.1', () => console.log(`AI connection: ${new URL(process.env.MCP_PUBLIC_URL).origin}/mcp`));
+    server.board.gateway.on('error', e => { console.error(e.message); server.close(); });
+  }
   server.listen(port, '127.0.0.1', () => console.log(`abocado: http://127.0.0.1:${port}`));
   server.on('error', error => { console.error(error.message); process.exitCode = 1; server.close(); });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close());
