@@ -35,7 +35,7 @@ export function createApp({ database = resolve(root, 'data/board.sqlite'), publi
         const provided = req.headers['x-board-token'];
         if (typeof provided !== 'string' || !/^[a-f0-9]{64}$/.test(provided) || !timingSafeEqual(Buffer.from(provided), Buffer.from(token))) throw new AppError('画面を再読み込みしてください。', 403);
         if (req.method === 'GET' && url.pathname === '/api/state') return send(200, store.read());
-        if (req.method === 'GET' && url.pathname === '/api/connections') return send(200, { ...access.list(), mcpUrl: publicUrl ? `${new URL(publicUrl).origin}/mcp` : null });
+        if (req.method === 'GET' && url.pathname === '/api/connections') return send(200, { ...access.list(), mcpUrl: publicUrl ? `${new URL(publicUrl).origin}/mcp` : null, diagnostics: gateway?.diagnostics() ?? null });
         if (req.method === 'POST' && url.pathname.startsWith('/api/connections/')) {
           const input = await readBody(req);
           if (url.pathname === '/api/connections/approve') return send(200, access.approve(input.id, input.author, input.topics, store.read().topics.filter(t => !t.archived).map(t => t.id)));
