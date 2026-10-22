@@ -1,3 +1,4 @@
+import { createFeatures } from './features.mjs';
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const stamp = value => new Date(value).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -7,6 +8,7 @@ const descriptions = ['', 'まずはそれぞれの視点で。ほかの案を�
 let state, token, selected, view = 'board', shownRound = 1, archived = false, query = '', author = 'Love', dialogSave, dialogRevision;
 let noticeTimer;
 const drafts = new Map();
+const features = createFeatures({ getState: () => state, api, change, render, notify, keepDraft, editor, field: (...args) => field(...args), escape, stamp });
 function notify(message, error = false) {
   const box = $('#notice'); box.textContent = message; box.className = `visible${error ? ' error' : ''}`;
   clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { box.className = ''; }, error ? 12000 : 4500);
@@ -28,25 +30,25 @@ function references(ids) {
   return ids.length ? `<div class="refs">参照：${ids.map(id => { const p = state.posts.find(p => p.id === id); return `<span>${p ? escape(`${p.author} / R${p.round} · ${p.content.slice(0, 45)}`) : '不明な投稿'}</span>`; }).join('')}</div>` : '';
 }
 function postCard(p) {
-  return `<article class="post"><div class="post-head">${avatar(p.author)}<strong>${p.author}</strong><small>手動で記録</small><time datetime="${p.createdAt}">${stamp(p.createdAt)}</time></div><p class="prose">${escape(p.content)}</p>${references(p.references)}</article>`;
+  return `<article class="post"><div class="post-head">${avatar(p.author)}<strong>${p.author}</strong><small>${p.source === 'mcp' ? 'MCP経由・許可した接続から投稿' : p.source === 'api' ? 'API経由・許可した接続から投稿' : '手動で記録'}</small><time datetime="${p.createdAt}">${stamp(p.createdAt)}</time></div><p class="prose">${escape(p.content)}</p>${references(p.references)}</article>`;
 }
 function checks(posts, name = 'references') {
   return `<div class="checkboxes">${posts.map(p => `<label><input type="checkbox" name="${name}" value="${p.id}"><span><strong>${p.author}</strong> / R${p.round} — ${escape(p.content.slice(0, 150))}</span></label>`).join('')}</div>`;
 }
 function render() {
-  $('#app').innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><span class="logo">●</span><div>abocado<small>MULTI AI BOARD</small></div></div><nav class="nav" aria-label="メイン"><button data-view="board" class="${view === 'board' ? 'active' : ''}">▤ 議題ボード</button><button data-view="memory" class="${view === 'memory' ? 'active' : ''}">◇ メモリー</button><button data-view="history" class="${view === 'history' ? 'active' : ''}">◷ 決定履歴</button></nav><div class="sidebar-info"><strong><span class="dot"></span>手動投稿モード</strong>Love・Ludy・Tinaは未接続です。各AIの回答をコピーして記録してください。<br>保存先：このPCのSQLite</div></aside><main class="main"><div class="topline"><span>WORKSPACE / abocadoプロジェクト</span><div class="top-actions"><button class="quiet small" data-refresh>再読み込み</button><button class="secondary small" data-export>バックアップ ↓</button></div></div>${view === 'board' ? board() : view === 'memory' ? memoryView() : historyView()}<footer class="footer">abocado · アイデアを持ち寄り、Kenが決める。 / ローカルMVP</footer></main></div>`;
-  bind();
+  $('#app').innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><span class="logo">●</span><div>abocado<small>MULTI AI BOARD</small></div></div><nav class="nav" aria-label="メイン"><button data-view="board" class="${view === 'board' ? 'active' : ''}">▤ 議題ボード</button><button data-view="memory" class="${view === 'memory' ? 'active' : ''}">◇ メモリー</button><button data-view="history" class="${view === 'history' ? 'active' : ''}">◷ 決定履歴</button><button data-view="connections" class="${view === 'connections' ? 'active' : ''}">⇄ AI接続</button></nav><div class="sidebar-info"><strong><span class="dot"></span>手動＋許可したAIの投稿</strong>外部接続は「AI接続」で確認できます。接続からの投稿はMCP・API経由と表示します。<br>保存先：このPCのSQLite</div></aside><main class="main"><div class="topline"><span>WORKSPACE / abocadoプロジェクト</span><div class="top-actions"><button class="quiet small" data-refresh>再読み込み</button><button class="secondary small" data-export>バックアップ ↓</button></div></div>${view === 'board' ? board() : view === 'memory' ? memoryView() : view === 'connections' ? features.connectionsView() : historyView()}<footer class="footer">abocado · アイデアを持ち寄り、Kenが決める。 / ローカルMVP</footer></main></div>`;
+  bind(); features.bind();
 }
 function board() {
   const topics = state.topics.filter(t => t.archived === archived && `${t.title} ${t.brief}`.toLowerCase().includes(query.toLowerCase()));
-  return `<div class="heading"><div><div class="eyebrow">From ideas to decisions</div><h1>みんなの案を、ひとつの決定へ。</h1><p class="muted">独立した視点を重ねて、プロジェクトの次の一歩を。</p></div><button data-new-topic>＋ 新しい議題</button></div><div class="participants">${people.map(a => `<div class="person-card">${avatar(a)}<div><strong>${a}</strong><small>${a === 'Ken' ? 'オーナー · 最終決定' : 'AI未接続 · 手動入力'}</small></div></div>`).join('')}</div><div class="workspace"><section class="panel list-panel" aria-label="議題一覧"><div class="list-header"><span>議題 <span class="badge">${topics.length}</span></span><button class="quiet small" data-archives>${archived ? '進行中を見る' : '保管済み'}</button></div><input class="search" id="search" aria-label="議題を検索" placeholder="議題を検索…" value="${escape(query)}">${topics.map(t => `<button class="topic-item ${t.id === selected ? 'selected' : ''}" data-topic="${t.id}"><strong>${escape(t.title)}</strong><span>${t.status === 'decided' ? '✓ 決定済み' : `Round ${t.round} · ${names[t.round]}`}　${stamp(t.updatedAt)}</span></button>`).join('') || '<p class="muted">議題はまだありません。</p>'}</section><section class="panel" aria-label="議題の詳細">${topic() ? detail(topic()) : `<div class="empty"><div class="empty-icon">◇</div><h2>最初の議題をはじめましょう</h2><p>相談したいこと、決めたいことをひとつ。<br>Love・Ludy・Tinaの視点をここに集めます。</p><button data-new-topic>＋ 議題を作成</button></div>`}</section></div>`;
+  return `<div class="heading"><div><div class="eyebrow">From ideas to decisions</div><h1>みんなの案を、ひとつの決定へ。</h1><p class="muted">独立した視点を重ねて、プロジェクトの次の一歩を。</p></div><button data-new-topic>＋ 新しい議題</button></div><div class="participants">${people.map(a => `<div class="person-card">${avatar(a)}<div><strong>${a}</strong><small>${a === 'Ken' ? 'オーナー · 最終決定' : '接続はAI接続で確認'}</small></div></div>`).join('')}</div><div class="workspace"><section class="panel list-panel" aria-label="議題一覧"><div class="list-header"><span>議題 <span class="badge">${topics.length}</span></span><button class="quiet small" data-archives>${archived ? '進行中を見る' : '保管済み'}</button></div><input class="search" id="search" aria-label="議題を検索" placeholder="議題を検索…" value="${escape(query)}">${topics.map(t => `<button class="topic-item ${t.id === selected ? 'selected' : ''}" data-topic="${t.id}"><strong>${escape(t.title)}</strong><span>${t.status === 'decided' ? '✓ 決定済み' : `Round ${t.round} · ${names[t.round]}`}　${stamp(t.updatedAt)}</span></button>`).join('') || '<p class="muted">議題はまだありません。</p>'}</section><section class="panel" aria-label="議題の詳細">${topic() ? detail(topic()) : `<div class="empty"><div class="empty-icon">◇</div><h2>最初の議題をはじめましょう</h2><p>相談したいこと、決めたいことをひとつ。<br>Love・Ludy・Tinaの視点をここに集めます。</p><button data-new-topic>＋ 議題を作成</button></div>`}</section></div>`;
 }
 function detail(t) {
   const posts = state.posts.filter(p => p.topicId === t.id && p.round === shownRound);
   const decisions = state.decisions.filter(d => d.topicId === t.id);
   const d = decisions.at(-1);
   const missing = people.slice(1).filter(a => !state.posts.some(p => p.topicId === t.id && p.round === t.round && p.author === a));
-  return `<div class="detail-top"><div><span class="badge ${d ? 'done' : ''}">${t.archived ? '保管済み' : d ? '✓ Kenが決定済み' : '議論中'}</span><h2>${escape(t.title)}</h2></div><div><button class="quiet small" data-edit-topic ${t.archived || d ? 'disabled' : ''}>編集</button><button class="quiet small" data-archive>${t.archived ? '議題を戻す' : '保管する'}</button></div></div><p class="prose brief">${escape(t.brief)}</p><div class="rounds">${[1, 2, 3].map(r => `<button class="round ${shownRound === r ? 'active' : ''}" data-round="${r}" ${r > t.round ? 'disabled' : ''}>${r < t.round ? '✓ ' : ''}ROUND ${r}<b>${names[r]}</b></button>`).join('')}</div><div class="round-info">${descriptions[shownRound]}<br>現在：Round ${t.round} ${missing.length ? ` / ${missing.join('・')}の投稿待ち` : ' / 3人の投稿が揃いました'}</div><div class="section-title"><h3>${names[shownRound]} <span class="badge">${posts.length} 投稿</span></h3><button class="secondary small" data-copy>AI用の依頼文をコピー</button></div>${shownRound === 1 && t.round === 1 ? '<details><summary class="muted">独立案の投稿を見る（ほかの案を読まずに投稿してください）</summary>' : ''}${posts.map(postCard).join('') || '<p class="empty muted">まだ投稿がありません。各AIの回答を手動で記録しましょう。</p>'}${shownRound === 1 && t.round === 1 ? '</details>' : ''}${!t.archived && !d && shownRound === t.round ? composer(t) : ''}${!t.archived && !d && t.round < 3 ? `<div class="form-footer"><span class="muted">3人の投稿が揃うと、次に進めます。</span><button data-advance ${roundComplete(t) ? '' : 'disabled'}>Round ${t.round + 1}へ進む →</button></div>` : ''}${!t.archived && t.round === 3 ? `<div class="decision">${d ? `<h3>✓ Kenの決定</h3><p class="prose">${escape(d.content)}</p><p class="prose muted">理由：${escape(d.reason)}</p>${references(d.references)}<p class="muted">${stamp(d.createdAt)} · 決定履歴 ${decisions.length}件</p><button class="secondary small" data-memory-decision="${d.id}">メモリーに残す</button> <button class="quiet small" data-decide>決定を改訂する</button>` : `<h3>最後は、Kenが決める。</h3><p class="muted">最終案を選び、決定内容と理由を残しましょう。</p><button data-decide ${roundComplete(t) ? '' : 'disabled'}>Kenの決定を記録</button>`}</div>` : ''}`;
+  return `<div class="detail-top"><div><span class="badge ${d ? 'done' : ''}">${t.archived ? '保管済み' : d ? '✓ Kenが決定済み' : '議論中'}</span><h2>${escape(t.title)}</h2></div><div><button class="quiet small" data-edit-topic ${t.archived || d ? 'disabled' : ''}>編集</button><button class="quiet small" data-archive>${t.archived ? '議題を戻す' : '保管する'}</button></div></div><p class="prose brief">${escape(t.brief)}</p><div class="rounds">${[1, 2, 3].map(r => `<button class="round ${shownRound === r ? 'active' : ''}" data-round="${r}" ${r > t.round ? 'disabled' : ''}>${r < t.round ? '✓ ' : ''}ROUND ${r}<b>${names[r]}</b></button>`).join('')}</div><div class="round-info">${descriptions[shownRound]}<br>現在：Round ${t.round} ${missing.length ? ` / ${missing.join('・')}の投稿待ち` : ' / 3人の投稿が揃いました'}</div><div class="section-title"><h3>${names[shownRound]} <span class="badge">${posts.length} 投稿</span></h3><button class="secondary small" data-copy>AI用の依頼文をコピー</button></div>${shownRound === 1 && t.round === 1 ? '<details><summary class="muted">独立案の投稿を見る（ほかの案を読まずに投稿してください）</summary>' : ''}${posts.map(postCard).join('') || '<p class="empty muted">まだ投稿がありません。各AIの回答を手動で記録しましょう。</p>'}${shownRound === 1 && t.round === 1 ? '</details>' : ''}${!t.archived && !d && shownRound === t.round ? composer(t) : ''}${!t.archived && !d && t.round < 3 ? `<div class="form-footer"><span class="muted">3人の投稿が揃うと、次に進めます。</span><button data-advance ${roundComplete(t) ? '' : 'disabled'}>Round ${t.round + 1}へ進む →</button></div>` : ''}${!t.archived && t.round === 3 ? `<div class="decision">${d ? `<h3>✓ Kenの決定</h3><p class="prose">${escape(d.content)}</p><p class="prose muted">理由：${escape(d.reason)}</p>${references(d.references)}<p class="muted">${stamp(d.createdAt)} · 決定履歴 ${decisions.length}件</p><button class="secondary small" data-memory-decision="${d.id}">メモリーに残す</button> <button class="quiet small" data-decide>決定を改訂する</button>` : `<h3>最後は、Kenが決める。</h3><p class="muted">最終案を選び、決定内容と理由を残しましょう。</p><button data-decide ${roundComplete(t) ? '' : 'disabled'}>Kenの決定を記録</button>`}</div>` : ''}${features.timeline(t)}`;
 }
 function composer(t) {
   const draft = drafts.get(`${t.id}:${t.round}`) || { content: '', references: [], author };
@@ -63,7 +65,7 @@ function keepDraft() {
   if (form && t) drafts.set(`${t.id}:${t.round}`, { content: form.elements.content.value, author: form.elements.author.value, references: [...form.querySelectorAll('[name="references"]:checked')].map(e => e.value) });
 }
 function bind() {
-  document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { keepDraft(); view = b.dataset.view; render(); });
+  document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { keepDraft(); view = b.dataset.view; render(); if (view === 'connections') features.loadConnections(); });
   document.querySelectorAll('[data-new-topic]').forEach(b => b.onclick = () => topicEditor());
   document.querySelectorAll('[data-topic],[data-open-topic]').forEach(b => b.onclick = () => { keepDraft(); selected = b.dataset.topic || b.dataset.openTopic; shownRound = topic().round; view = 'board'; archived = topic().archived; render(); });
   document.querySelectorAll('[data-round]').forEach(b => b.onclick = () => { keepDraft(); shownRound = Number(b.dataset.round); render(); });
@@ -93,7 +95,7 @@ function bind() {
 }
 function editor(title, fields, save) {
   dialogRevision = state.revision;
-  $('#editor-fields').innerHTML = `<h2>${title}</h2>${fields}`; dialogSave = save; $('#editor').showModal();
+  $('#editor-fields').innerHTML = `<h2>${title}</h2>${fields}`; dialogSave = save; $('#editor-submit').hidden = !save; $('#cancel').textContent = save ? 'キャンセル' : '閉じる'; $('#editor').showModal();
 }
 const field = (name, label, value = '', multiline = false, max = 20000) => `<label for="edit-${name}">${label}</label>${multiline ? `<textarea id="edit-${name}" name="${name}" required maxlength="${max}">${escape(value)}</textarea>` : `<input id="edit-${name}" name="${name}" required maxlength="${max}" value="${escape(value)}">`}`;
 function topicEditor(t) {
@@ -111,7 +113,7 @@ function memoryEditor(id, decisionId) {
 function decisionEditor() {
   const t = topic(); const d = state.decisions.filter(d => d.topicId === t.id).at(-1);
   editor(d ? 'Kenの決定を改訂' : 'Kenの決定を記録', `${field('content', '決定内容', d?.content, true)}${field('reason', '決定理由', d?.reason, true)}<label>採用・参考にした最終案（1件以上）</label>${checks(state.posts.filter(p => p.topicId === t.id && p.round === 3))}<p class="muted">Kenとして記録します。改訂前の決定も保持します。</p>`, async data => {
-    await change('decide', { topicId: t.id, author: 'Ken', content: data.get('content'), reason: data.get('reason'), references: data.getAll('references') }, dialogRevision); keepDraft();
+    await change('decide', { topicId: t.id, author: 'Ken', content: data.get('content'), reason: data.get('reason'), references: data.getAll('references') }, dialogRevision); shownRound = 3; keepDraft();
   });
   if (d) $('#editor').querySelectorAll('[name="references"]').forEach(e => { e.checked = d.references.includes(e.value); });
 }
@@ -122,12 +124,12 @@ async function copyContext() {
     ...(t.round > 1 ? ['\nこれまでの投稿', ...state.posts.filter(p => p.topicId === t.id && p.round < t.round).map(p => `Round ${p.round} / ${p.author}\n${p.content}`)] : []),
     '\n提案を文章で回答してください。外部への操作や自動投稿は行わず、Kenが回答を手動で記録します。'].join('\n\n');
   try { await navigator.clipboard.writeText(content); notify('依頼文をコピーしました。対象のAIに貼り付けてください。'); }
-  catch { editor('AI用の依頼文', `${field('context', 'コピーしてAIに貼り付けてください', content, true)}<p class="muted">この画面の内容は保存されません。</p>`, async () => {}); }
+  catch { editor('AI用の依頼文', `${field('context', 'コピーしてAIに貼り付けてください', content, true)}<p class="muted">この画面の内容は保存されません。</p>`, null); }
 }
 $('#cancel').onclick = () => $('#editor').close();
 $('#editor-form').onsubmit = async e => {
   e.preventDefault(); const b = $('#editor-submit'); b.disabled = true;
-  try { await dialogSave(new FormData(e.target)); $('#editor').close(); render(); notify('保存しました。'); }
+  try { if (!dialogSave) { $('#editor').close(); return; } await dialogSave(new FormData(e.target), dialogRevision); $('#editor').close(); render(); notify('保存しました。'); }
   catch (error) { notify(error.message, true); }
   finally { b.disabled = false; }
 };

@@ -3,5 +3,11 @@ data/
 *.sqlite*
 *.backup.json
 .env
+.env.*
+!.env.example
+.gemini/
+*.credential.json
 coverage/
 test-results/
+.runtime/
+*.exe
