@@ -37,6 +37,8 @@ test('REST and MCP share scoped identity, receipts, replay safety, and revocatio
     assert.equal((await send('/api/v1/proposals', { ...input, content: 'changed' })).status, 409);
     const rpc = await (await send('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_receipt', arguments: { post_id: post.id } } })).json();
     assert.deepEqual(JSON.parse(rpc.result.content[0].text), post);
+    const activity = access.list().grants.find(g => g.id === credential.grant_id);
+    assert.ok(activity.lastPostedAt); assert.ok(activity.lastReceiptAt);
     assert.equal((await send('/api/v1/receipts/' + post.id, null, issue().access_token)).status, 404);
     assert.equal((await send('/api/v1/proposals')).status, 405);
     const adapter = (url, options) => fetch(url.replace('https://board.example', base), options);
@@ -46,6 +48,15 @@ test('REST and MCP share scoped identity, receipts, replay safety, and revocatio
     assert.equal(report.ok, true); assert.equal(report.gemini_verified, false); assert.equal(store.read().posts.length, 2);
     access.revoke(credential.grant_id);
     assert.equal((await send('/api/v1/topics')).status, 401);
+    await fetch(base + '/authorize?state=secret-state&code=secret-code');
+    const diagnostics = gateway.diagnostics();
+    assert.ok(diagnostics.events.some(e => e.stage === 'post' && e.status === 409));
+    assert.ok(diagnostics.events.some(e => e.stage === 'receipt' && e.status === 200));
+    assert.ok(diagnostics.events.some(e => e.stage === 'authorization' && e.status === 400));
+    assert.ok(!JSON.stringify(diagnostics).includes(credential.access_token));
+    assert.ok(!JSON.stringify(diagnostics).includes('secret-'));
+    for (let i = 0; i < 55; i++) await fetch(base + '/healthz');
+    assert.equal(gateway.diagnostics().events.length, 50);
   } finally { await new Promise(r => gateway.close(r)); access.close(); store.close(); }
 });
 

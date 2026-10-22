@@ -36,3 +36,20 @@ test('HTTP workflow, capability protection, origin/host checks and safe export',
     assert.equal((await fetch(`${base}/style.css`)).status, 200);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+test('connection diagnostics are available only through the protected local operator API', async () => {
+  const server = createApp({ database: ':memory:', publicUrl: 'https://board.example' });
+  const gateway = server.board.gateway;
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  await new Promise(r => gateway.listen(0, '127.0.0.1', r));
+  const local = `http://127.0.0.1:${server.address().port}`, remote = `http://127.0.0.1:${gateway.address().port}`;
+  try {
+    await fetch(remote + '/mcp');
+    assert.equal((await fetch(local + '/api/connections')).status, 403);
+    assert.equal((await fetch(remote + '/api/connections')).status, 404);
+    const { token } = await (await fetch(local + '/api/session')).json();
+    const result = await (await fetch(local + '/api/connections', { headers: { 'X-Board-Token': token } })).json();
+    assert.ok(result.diagnostics.events.some(e => e.stage === 'authentication' && e.status === 401));
+    assert.ok(!JSON.stringify(result).includes(token));
+  } finally { await new Promise(r => server.close(r)); }
+});
